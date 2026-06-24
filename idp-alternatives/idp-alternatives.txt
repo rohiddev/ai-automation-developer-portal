@@ -1,0 +1,243 @@
+DEVELOPER PORTAL ALTERNATIVES TO HARNESS IDP
+============================================
+
+Main alternatives ranked by cost, with trade-offs and Temporal integration
+options.
+
+
+Option 1 — Raw Backstage (Open Source)
+--------------------------------------
+
+Cost: $0 license. ~1 FTE operations.
+
+Harness IDP is built on Backstage. You can self-host it directly.
+
+Features:
+  * Free software catalog, scorecards, TechDocs, workflows
+  * 200+ community plugins
+  * Full control — you own the code
+  * Real cost: 1 engineer to maintain, upgrade, and write plugins
+
+Best for:
+  Teams with Kubernetes already running and willingness to own the platform.
+
+
+Option 2 — Roadie (Managed Backstage)
+-----------------------------------
+
+Cost: ~$25–50/user/month.
+
+SaaS-hosted Backstage — no operations overhead, all plugins managed for you.
+
+Features:
+  * Same Backstage catalog / scorecards / TechDocs
+  * Plugin marketplace, no custom builds needed
+  * GitHub / GitLab / Jira integrations out of the box
+  * No Harness-equivalent workflow builder (that is Harness-specific)
+
+Best for:
+  Teams that want Backstage features without the operations burden.
+
+
+Option 3 — Port
+---------------
+
+Cost: Free tier + paid plans starting ~$8/user/month.
+
+Modern catalog-first portal. Strong self-service actions and scorecards.
+
+Features:
+  * Catalog, scorecards, workflows, RBAC
+  * Self-service actions via GitHub Actions / webhooks
+  * REST API for programmatic catalog management
+  * No delegate model — lighter weight than Harness
+
+Best for:
+  Teams wanting SaaS simplicity with good self-service workflow support.
+
+
+Option 4 — Cortex
+-----------------
+
+Cost: Enterprise pricing (per seat, negotiated).
+
+Focus: service maturity scorecards and ownership.
+
+Features:
+  * Strong on scorecards and engineering standards
+  * Catalog + integrations (GitHub, PagerDuty, Datadog, etc.)
+  * Less focus on self-service workflows
+  * Generally cheaper than Harness at a comparable feature set
+
+Best for:
+  Organisations where scorecards and service quality tracking are the primary
+  driver.
+
+
+Option 5 — OpsLevel
+-------------------
+
+Cost: Enterprise pricing.
+
+Similar to Cortex — service catalog + maturity tracking.
+
+Features:
+  * Maturity levels, checks, service ownership
+  * Integrates with existing tools for data pull
+  * Lighter on workflow / self-service than Harness
+
+
+Comparison Table
+----------------
+
+                       |  Harness IDP  |  Raw Backstage  |    Roadie     |     Port     |   Cortex   |  OpsLevel
+-----------------------|---------------|-----------------|---------------|--------------|------------|------------
+License cost           | $$$ platform  | $0              | $25-50/user/mo| $8+/user/mo  | Enterprise | Enterprise
+Ops overhead           | Low           | High (1 FTE)    | None          | None         | None       | None
+Self-service workflows | Native (best) | DIY plugins     | Limited       | Good         | Limited    | Limited
+Native approvals       | Yes (Harness  | No              | No            | Webhooks only| No         | No
+                       |   pipelines)  |                 |               |              |            |
+Scorecards             | Yes           | Community plugin| Yes           | Yes          | Strong     | Strong
+Catalog                | Yes           | Yes             | Yes           | Yes          | Yes        | Yes
+IDP-native pipeline    | Yes           | No              | No            | No           | No         | No
+  trigger
+
+
+Key Trade-off
+-------------
+
+The one thing Harness IDP does that nothing else matches out of the box:
+IDP-native workflow trigger -> Harness pipeline with approval step.
+
+If your self-service workflows depend on that chain, you would need to rebuild it
+elsewhere (GitHub Actions + environment gates, or Temporal signals).
+
+If your primary use is catalog + scorecards + TechDocs, Roadie or raw Backstage
+give you 90% of the value at a fraction of the cost.
+
+
+Can These IDPs Call Temporal Workflows?
+----------------------------------------
+
+Yes, all of them can. Temporal exposes an HTTP API and an SDK — any system that
+can make an HTTP call can trigger a workflow.
+
+How the connection works:
+
+  IDP Portal (any)
+      |
+      |  HTTP POST (webhook / REST)
+      v
+  Trigger Service
+      |  (thin FastAPI / Lambda / Cloud Run)
+      |  Temporal Python / Go SDK
+      v
+  Temporal Server
+      |
+      v
+  Workflow runs (durable, survives restarts)
+
+The IDP never talks to Temporal directly — it calls a lightweight HTTP endpoint
+that holds the Temporal SDK client. That endpoint starts the workflow.
+
+
+Per Portal Integration
+----------------------
+
+Raw Backstage / Roadie
+  Write a custom scaffolder action in TypeScript:
+
+    createTemplateAction({
+      id: 'temporal:start-workflow',
+      async handler(ctx) {
+        await fetch('https://your-trigger-service/start', {
+          method: 'POST',
+          body: JSON.stringify(ctx.input),
+        });
+      },
+    });
+
+  The scaffolder action runs when the user submits the workflow form.
+
+Port
+  Port has native webhook actions. Configure an action -> point it at your trigger
+  service URL -> Port POSTs the form payload when the user clicks.
+
+  No code is needed in Port — just configure the webhook URL and map form fields
+  to the request body.
+
+Harness IDP
+  An HTTP step in the pipeline calls the trigger service. Or call the Temporal
+  Cloud REST API directly from the HTTP step — no intermediate service is needed
+  if using Temporal Cloud.
+
+  IDP Workflow form
+      |
+      v
+  Harness Pipeline
+      |-- Approval Stage    <- native Harness approval before triggering
+      |-- HTTP Step         <- POST to Temporal trigger endpoint
+
+  This is the strongest option — approval happens in Harness first, then Temporal
+  takes over for the long-running part.
+
+
+Temporal Cloud REST API (Direct, No SDK)
+------------------------------------------
+
+Temporal Cloud exposes a REST API. Any portal can call it directly with a bearer
+token:
+
+  POST https://{namespace}.tmprl.cloud/api/v1/namespaces/{ns}/workflows
+  {
+    "workflowId": "vendor-approval-001",
+    "workflowType": { "name": "VendorApprovalWorkflow" },
+    "taskQueue": { "name": "vendor-queue" },
+    "input": { "payloads": [...] }
+  }
+
+No SDK, no intermediate service. Just an HTTP call with a Temporal Cloud API key
+from Vault.
+
+
+Recommended Pattern for Large Enterprise
+------------------------------------------
+
+  Port or Backstage
+      |  (webhook action — form data)
+      v
+  FastAPI Trigger Service (ECS / Cloud Run)
+      |  Temporal SDK client
+      v
+  Temporal Workflow
+      |-- WaitForSignal: manager_approved
+      |-- WaitForSignal: director_approved
+      |-- Activity: execute + write to ServiceNow
+
+What each layer owns:
+  * Portal: employee-facing form, catalog, scorecards
+  * Temporal: durable execution, approval waits, retry logic, audit trail
+  * Portal is swappable — Temporal does not care which portal triggered it
+
+The trigger service is ~50 lines of FastAPI. That is the only glue code you write.
+
+
+Bottom Line
+-----------
+
+For cost-sensitive teams:
+  * Raw Backstage gives the lowest license cost if you can afford 1 FTE.
+  * Roadie removes the operations burden at $25–50/user/month.
+  * Port offers the best balance of SaaS simplicity and workflow support at
+    $8+/user/month.
+
+For approval-heavy self-service workflows:
+  * None of the alternatives match Harness's native IDP -> pipeline -> approval
+    chain. The best replacement is to keep Harness (or a lightweight portal) as
+    the form, and use Temporal for durable approval workflows.
+
+For large enterprises:
+  * Use Port or Backstage for the catalog and employee experience.
+  * Use Temporal as the durable workflow backbone.
+  * Use Harness only where its native approval + IDP integration is worth the
+    premium.
