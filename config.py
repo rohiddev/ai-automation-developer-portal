@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     vertex_ai_search_engine: str | None = None
     vertex_ai_search_location: str = "us-central1"
 
+    # Adapter backends (pluggable enterprise integration)
+    adapter_orchestrator: Literal["memory", "harness"] = "memory"
+    adapter_secret_store: Literal["memory", "vault", "gsm"] = "memory"
+    adapter_audit_store: Literal["memory", "cloud_logging"] = "memory"
+
     # Harness IDP
     harness_idp_base_url: str = "https://app.harness.io/ng"
     harness_account_identifier: str | None = None

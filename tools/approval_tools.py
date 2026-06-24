@@ -2,26 +2,34 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
+from adapters.factory import get_adapters
+from config import Settings, get_settings
 from security.governance import build_audit_record, log_audit
 
 _APPROVALS: dict[str, dict[str, Any]] = {}
 
 
+def _get_orchestrator(settings: Settings | None = None) -> Any:
+    settings = settings or get_settings()
+    return get_adapters(settings)["orchestrator"]
+
+
 def request_manager_approval(request_id: str, requestor: str, summary: str) -> dict[str, Any]:
-    """Record a manager approval request and return its status."""
-    approval = {
-        "request_id": request_id,
-        "requestor": requestor,
-        "summary": summary,
-        "status": "pending",
-        "created_at": datetime.now(UTC).isoformat(),
-        "approved_by": None,
-        "approved_at": None,
-    }
-    _APPROVALS[request_id] = approval
+    """Create a manager approval request through the configured orchestrator."""
+    orchestrator = _get_orchestrator()
+    try:
+        approval = orchestrator.request_approval(request_id, requestor, summary)
+    except NotImplementedError:
+        approval = {
+            "request_id": request_id,
+            "requestor": requestor,
+            "summary": summary,
+            "status": "pending",
+            "note": "Orchestrator-native approvals not available; using in-memory tracking.",
+        }
+        _APPROVALS[request_id] = approval
     record = build_audit_record(
         actor=requestor,
         action="approval_requested",
@@ -34,20 +42,13 @@ def request_manager_approval(request_id: str, requestor: str, summary: str) -> d
 
 def check_approval_status(request_id: str) -> dict[str, Any]:
     """Return the current approval status for a request."""
-    approval = _APPROVALS.get(request_id)
-    if not approval:
-        return {"error": "Approval request not found"}
-    return approval
+    return _APPROVALS.get(request_id, {"error": "Approval request not found"})
 
 
 def approve_request(request_id: str, approver: str) -> dict[str, Any]:
     """Approve a request (manager action)."""
-    approval = _APPROVALS.get(request_id)
-    if not approval:
-        return {"error": "Approval request not found"}
-    approval["status"] = "approved"
-    approval["approved_by"] = approver
-    approval["approved_at"] = datetime.now(UTC).isoformat()
+    orchestrator = _get_orchestrator()
+    approval = orchestrator.approve(request_id, approver)
     record = build_audit_record(
         actor=approver,
         action="approval_granted",
@@ -59,13 +60,8 @@ def approve_request(request_id: str, approver: str) -> dict[str, Any]:
 
 def reject_request(request_id: str, approver: str, reason: str) -> dict[str, Any]:
     """Reject a request (manager action)."""
-    approval = _APPROVALS.get(request_id)
-    if not approval:
-        return {"error": "Approval request not found"}
-    approval["status"] = "rejected"
-    approval["approved_by"] = approver
-    approval["approved_at"] = datetime.now(UTC).isoformat()
-    approval["reason"] = reason
+    orchestrator = _get_orchestrator()
+    approval = orchestrator.reject(request_id, approver, reason)
     record = build_audit_record(
         actor=approver,
         action="approval_rejected",

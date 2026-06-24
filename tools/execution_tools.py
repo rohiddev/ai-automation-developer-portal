@@ -5,11 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
-
+from adapters.factory import get_adapters
 from config import Settings, get_settings
 from security.governance import build_audit_record, log_audit
-from security.iam import get_harness_api_key
 
 _EXECUTIONS: dict[str, dict[str, Any]] = {}
 
@@ -20,49 +18,20 @@ def submit_pipeline_request(
     requestor: str,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Submit a pipeline request and record the execution."""
+    """Submit a workflow/pipeline request through the configured orchestrator."""
     settings = settings or get_settings()
-    execution_id = f"exec-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
-    if not settings.harness_account_identifier or not settings.harness_project_identifier:
-        return {
-            "execution_id": execution_id,
-            "status": "submitted_mock",
-            "message": "Harness account/project not configured; returning mock submission.",
-        }
-    try:
-        api_key = get_harness_api_key(settings)
-        url = (
-            f"{settings.harness_idp_base_url}/gateway/pipeline/api/webhook/custom/"
-            f"{pipeline_identifier}/v3?accountIdentifier={settings.harness_account_identifier}"
-            f"&orgIdentifier={settings.harness_org_identifier}"
-            f"&projectIdentifier={settings.harness_project_identifier}"
-        )
-        response = httpx.post(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "X-Api-Key": api_key,
-            },
-            json={"inputset": inputset},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        _EXECUTIONS[execution_id] = {
-            "execution_id": execution_id,
-            "pipeline_identifier": pipeline_identifier,
-            "requestor": requestor,
-            "status": "submitted",
-            "api_url": data.get("data", {}).get("apiUrl"),
-        }
-    except Exception as exc:
-        _EXECUTIONS[execution_id] = {
-            "execution_id": execution_id,
-            "pipeline_identifier": pipeline_identifier,
-            "requestor": requestor,
-            "status": "submit_error",
-            "error": str(exc),
-        }
+    adapters = get_adapters(settings)
+    orchestrator = adapters["orchestrator"]
+    result = orchestrator.submit(pipeline_identifier, inputset)
+    timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    execution_id = result.get("execution_id") or f"exec-{timestamp}"
+    _EXECUTIONS[execution_id] = {
+        "execution_id": execution_id,
+        "pipeline_identifier": pipeline_identifier,
+        "requestor": requestor,
+        "status": result.get("status", "submitted"),
+        "orchestrator_response": result,
+    }
     record = build_audit_record(
         actor=requestor,
         action="pipeline_submitted",
@@ -82,28 +51,15 @@ def get_execution_status(execution_id: str) -> dict[str, Any]:
 
 
 def poll_execution(execution_id: str, settings: Settings | None = None) -> dict[str, Any]:
-    """Poll a running Harness execution via its API URL."""
+    """Poll a running execution through the configured orchestrator."""
     settings = settings or get_settings()
     execution = _EXECUTIONS.get(execution_id)
-    if not execution or not execution.get("api_url"):
-        return execution or {"error": "Execution not found"}
-    try:
-        api_key = get_harness_api_key(settings)
-        response = httpx.get(
-            execution["api_url"],
-            headers={"X-Api-Key": api_key},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        data = response.json()
-        summary = (
-            data.get("data", {})
-            .get("executionDetails", {})
-            .get("pipelineExecutionSummary", {})
-        )
-        execution["status"] = summary.get("status", "unknown")
-        execution["last_poll"] = datetime.now(UTC).isoformat()
-    except Exception as exc:
-        execution["status"] = "poll_error"
-        execution["error"] = str(exc)
+    if not execution:
+        return {"error": "Execution not found"}
+    adapters = get_adapters(settings)
+    orchestrator = adapters["orchestrator"]
+    result = orchestrator.status(execution_id)
+    execution["status"] = result.get("status", "unknown")
+    execution["last_poll"] = datetime.now(UTC).isoformat()
+    execution["orchestrator_response"] = result
     return execution

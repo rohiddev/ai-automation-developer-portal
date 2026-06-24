@@ -4,7 +4,7 @@ This document describes the governance, security, and responsible automation con
 
 ## 1. Scope and positioning
 
-This platform is an **enterprise Internal Developer Portal automation assistant**. It helps developers discover self-service workflows, generate YAML, request approvals, and track execution. It does **not** make production deployment, security, or infrastructure decisions on its own. All critical provisioning actions require human approval and are executed by Harness pipelines, not the agent directly.
+This platform is an **enterprise Internal Developer Portal automation assistant**. It helps developers discover self-service workflows, generate YAML, request approvals, and track execution. It does **not** make production deployment, security, or infrastructure decisions on its own. All critical provisioning actions require human approval and are executed by the configured orchestrator (e.g., Harness, GitHub Actions, GitLab CI, Azure DevOps), not the agent directly.
 
 ## 2. Governance pillars
 
@@ -49,14 +49,14 @@ All secrets are retrieved from HashiCorp Vault or Google Secret Manager at runti
 
 ### 2.6 Least privilege
 
-The service runs with Workload Identity or a dedicated service account. It has only the permissions needed to read secrets, write logs, and submit Harness pipeline requests. It cannot directly create cloud resources, modify production systems, or bypass approval gates.
+The service runs with Workload Identity or a dedicated service account. It has only the permissions needed to read secrets, write logs, and submit orchestrator requests through the configured adapter. It cannot directly create cloud resources, modify production systems, or bypass approval gates.
 
 ## 3. Responsible automation principles
 
 - **Human-in-the-loop:** Critical actions stop for human approval.
 - **Transparency:** Every recommendation explains which workflow, pipeline, and approval gate apply.
-- **Reversibility:** Harness pipeline executions can be re-run or rolled back from the failed stage.
-- **Observability:** All actions are traceable from the chat request through to pipeline completion.
+- **Reversibility:** Orchestrator executions can be re-run or rolled back from the failed stage when the orchestrator supports it.
+- **Observability:** All actions are traceable from the chat request through to execution completion.
 - **Non-discrimination:** Recommendations are based on the request description, not the requestor's identity.
 
 ## 4. Compliance alignment

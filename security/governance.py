@@ -13,6 +13,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from adapters.factory import get_adapters
 from config import Settings, get_settings
 
 # Simple patterns for secrets and tokens. Presidio should be used in production.
@@ -110,8 +111,10 @@ def build_audit_record(
 
 
 def log_audit(record: dict[str, Any], settings: Settings | None = None) -> None:
-    """Persist an audit record to Cloud Logging or stdout."""
+    """Persist an audit record through the configured audit store."""
     settings = settings or get_settings()
     if settings.audit_logging_enabled:
-        # Structured output; Cloud Logging agent picks this up in production.
+        adapters = get_adapters(settings)
+        adapters["audit_store"].write(record)
+        # Always echo structured JSON for local debugging and log agents.
         print(json.dumps(record, sort_keys=True, default=str))

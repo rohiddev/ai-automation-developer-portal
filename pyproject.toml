@@ -40,7 +40,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agents*", "tools*", "security*", "retrieval*", "observability*"]
+include = ["adapters*", "agents*", "tools*", "security*", "retrieval*", "observability*"]
 
 [tool.ruff]
 line-length = 100

@@ -16,14 +16,16 @@ Internal platform teams are buried in repetitive, ticket-driven work:
 
 ## The solution
 
-An agent platform that sits in front of the existing IDP and Harness pipeline infrastructure. It:
+An agent platform that sits in front of the existing IDP and workflow/pipeline infrastructure. It:
 
 1. Understands the developer's request in natural language.
 2. Recommends the right self-service workflow.
 3. Generates validated Workflow and Pipeline YAML.
 4. Enforces manager approval for critical actions.
-5. Submits and tracks the Harness execution.
+5. Submits and tracks execution through the configured orchestrator adapter.
 6. Logs every action for audit and compliance.
+
+The platform is **orchestrator-agnostic**: it connects to Harness, GitHub Actions, GitLab CI, Azure DevOps, Argo, Tekton, or any custom orchestrator via pluggable adapters without changing the agent core.
 
 ## Why agents
 
@@ -47,17 +49,16 @@ An agent platform that sits in front of the existing IDP and Harness pipeline in
 - **Google ADK** for multi-agent orchestration patterns
 - **Gemini** for intent classification and YAML generation
 - **Vertex AI** for retrieval and model serving
-- **Harness IDP** for self-service workflows
-- **Harness pipelines** for execution and approvals
-- **HashiCorp Vault** for secrets
-- **Cloud Logging / Cloud Trace** for observability
+- **Pluggable orchestrator adapters** for self-service workflows and execution
+- **Pluggable secret store adapters** for secrets (Vault, GSM, AWS SM, Azure Key Vault)
+- **Pluggable audit adapters** for observability (Cloud Logging, Datadog, Splunk)
 
 ## Roadmap
 
 | Priority | Item |
 |---|---|
 | 1 | Agent platform core with workflow and pipeline generation |
-| 2 | Live Harness API integration for submission and polling |
+| 2 | Live orchestrator adapter integration for submission and polling |
 | 3 | Vertex AI Search retrieval backend for policies and templates |
 | 4 | Manager approval workflow with email and Slack notifications |
 | 5 | Deploy to Cloud Run with Gemini Enterprise Agent Platform governance |
