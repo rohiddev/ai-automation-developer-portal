@@ -1,0 +1,50 @@
+pipeline:
+  identifier: k8s_namespace_onboarding_pipeline
+  name: K8s Namespace Onboarding Pipeline
+  orgIdentifier: default
+  projectIdentifier: cfgIDPproject
+  stages:
+    - stage:
+        identifier: provision
+        name: Provision
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  identifier: manager_approval
+                  name: Manager Approval
+                  type: HarnessApproval
+                  spec:
+                    approvalMessage: Approve K8s namespace onboarding request
+                    approvers:
+                      userGroups: [manager_approvers]
+                      minimumCount: 1
+                      disallowPipelineExecutor: true
+                  timeout: 24h
+              - step:
+                  identifier: validate_input
+                  name: Validate Input
+                  type: Http
+                  spec:
+                    url: https://proxy/platform-api/validate
+                    method: POST
+                    headers:
+                      - key: Content-Type
+                        value: application/json
+                    requestBody: '{"sysid":"<+pipeline.variables.sysid>","cluster":"<+pipeline.variables.cluster>"}'
+                    assertion: <+httpResponseCode> == 200
+                    delegateSelectors:
+                      - act-delegate-k8s-ephub-p2r1
+                  timeout: 30s
+                  failureStrategies:
+                    - onFailure:
+                        errors: [AllErrors]
+                        action:
+                          type: Retry
+                          spec:
+                            retryCount: 2
+                            retryIntervals: [30s]
+                            onRetryFailure:
+                              action:
+                                type: Abort

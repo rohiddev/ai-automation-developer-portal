@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.so
+.env
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+*.log
+*.out
+*.db
+.vscode/
+.idea/
+*.key
+*.pem
+*.crt
+*.p12
+
+# IDP artifact outputs
+*.generated.yaml
+*.generated.json
+pipeline_outputs/

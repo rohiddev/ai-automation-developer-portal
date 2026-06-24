@@ -1,0 +1,45 @@
+apiVersion: harness.io/v1
+kind: Workflow
+identifier: k8s_namespace_onboarding
+name: K8s Namespace Onboarding
+type: service
+owner: platform_engineering
+metadata:
+  orgIdentifier: default
+  projectIdentifier: cfgIDPproject
+  description: Self-service K8s namespace onboarding
+  tags: [self-service, k8s, namespace]
+spec:
+  parameters:
+    - title: Application Details
+      properties:
+        sysid:
+          title: SYS ID
+          type: string
+          pattern: "^SYSID-[0-9]{5}$"
+        appKey:
+          title: App Key
+          type: string
+        cluster:
+          title: Cluster
+          type: string
+          enum: [SHARED1, SHARED2]
+        requestorEmail:
+          title: Requestor Email
+          type: string
+          format: email
+  steps:
+    - id: trigger_pipeline
+      name: Trigger K8s Onboarding Pipeline
+      action: trigger:harness-custom-pipeline
+      input:
+        url: https://app.harness.io/ng/account/<+account.identifier>/org/default/projects/cfgIDPproject/pipelines/k8s_namespace_onboarding_pipeline
+        inputset:
+          sysid: ${{ parameters.sysid }}
+          appKey: ${{ parameters.appKey }}
+          cluster: ${{ parameters.cluster }}
+          requestorEmail: ${{ parameters.requestorEmail }}
+  output:
+    links:
+      - title: View Pipeline
+        url: ${{ steps.trigger_pipeline.output.url }}
