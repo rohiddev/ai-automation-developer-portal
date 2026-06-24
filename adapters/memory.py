@@ -57,6 +57,9 @@ class InMemoryOrchestrator(Orchestrator):
         }
         return self._approvals[request_id]
 
+    def get_approval(self, request_id: str) -> dict[str, Any]:
+        return self._approvals.get(request_id, {"error": "Approval request not found"})
+
 
 class InMemoryAuditStore(AuditStore):
     """Non-persistent audit store for local development and unit tests."""

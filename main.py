@@ -1,4 +1,8 @@
-"""FastAPI entry point for the IDP agent platform."""
+"""FastAPI entry point for the IDP agent platform.
+
+All endpoints work with the default in-memory adapters, so the platform is fully
+functional via API without any external orchestrator (e.g., Harness) configured.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents import (
     ApprovalAgent,
@@ -33,6 +37,44 @@ class AskResponse(BaseModel):
     data: dict[str, Any] | None = None
 
 
+class GenerateWorkflowRequest(BaseModel):
+    identifier: str = "example_self_service_workflow"
+    name: str = "Example Self Service Workflow"
+    parameters: list[dict[str, Any]] = Field(default_factory=list)
+    pipeline_identifier: str = "example_pipeline"
+    actor: str = "developer"
+
+
+class GeneratePipelineRequest(BaseModel):
+    identifier: str = "example_self_service_pipeline"
+    name: str = "Example Self Service Pipeline"
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    requires_approval: bool = False
+    actor: str = "developer"
+
+
+class SubmitRequest(BaseModel):
+    pipeline_identifier: str
+    inputset: dict[str, Any] = Field(default_factory=dict)
+    actor: str = "developer"
+
+
+class StatusRequest(BaseModel):
+    execution_id: str
+
+
+class ApprovalRequest(BaseModel):
+    request_id: str | None = None
+    requestor: str = "developer"
+    summary: str = ""
+
+
+class ApprovalActionRequest(BaseModel):
+    request_id: str
+    approver: str
+    reason: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_telemetry()
@@ -41,7 +83,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="IDP Automation Agent Platform",
-    description="Multi-agent self-service automation for the Internal Developer Portal.",
+    description=(
+        "Multi-agent self-service automation API. Works with or without an external orchestrator."
+    ),
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -86,20 +130,114 @@ async def ask(request: AskRequest) -> AskResponse:
     )
 
 
-@app.post("/audit")
+@app.post("/generate/workflow", response_model=AskResponse)
+async def generate_workflow(request: GenerateWorkflowRequest) -> AskResponse:
+    agent = WorkflowAgent()
+    context = {
+        "workflow_request": {
+            "identifier": request.identifier,
+            "name": request.name,
+            "parameters": request.parameters,
+            "pipeline_identifier": request.pipeline_identifier,
+        }
+    }
+    response = agent.run("generate workflow", context)
+    log_audit(build_audit_record(
+        actor=request.actor,
+        action="generate_workflow",
+        resource=request.identifier,
+    ))
+    return AskResponse(agent=response.agent, answer=response.answer, data=response.data)
+
+
+@app.post("/generate/pipeline", response_model=AskResponse)
+async def generate_pipeline(request: GeneratePipelineRequest) -> AskResponse:
+    agent = PipelineAgent()
+    context = {
+        "pipeline_request": {
+            "identifier": request.identifier,
+            "name": request.name,
+            "steps": request.steps,
+            "requires_approval": request.requires_approval,
+        }
+    }
+    response = agent.run("generate pipeline", context)
+    log_audit(build_audit_record(
+        actor=request.actor,
+        action="generate_pipeline",
+        resource=request.identifier,
+    ))
+    return AskResponse(agent=response.agent, answer=response.answer, data=response.data)
+
+
+@app.post("/execute", response_model=AskResponse)
+async def execute(request: SubmitRequest) -> AskResponse:
+    agent = ExecutionAgent()
+    context = {
+        "execution_request": {
+            "pipeline_identifier": request.pipeline_identifier,
+            "inputset": request.inputset,
+            "requestor": request.actor,
+        }
+    }
+    response = agent.run("submit pipeline", context)
+    return AskResponse(agent=response.agent, answer=response.answer, data=response.data)
+
+
+@app.post("/status", response_model=AskResponse)
+async def status(request: StatusRequest) -> AskResponse:
+    agent = ExecutionAgent()
+    context = {"execution_request": {"execution_id": request.execution_id}}
+    response = agent.run("check status", context)
+    return AskResponse(agent=response.agent, answer=response.answer, data=response.data)
+
+
+@app.post("/approval/request", response_model=AskResponse)
+async def approval_request(request: ApprovalRequest) -> AskResponse:
+    from tools.approval_tools import request_manager_approval
+    request_id = request.request_id or (
+        f"req-{request.requestor}-{hash(request.summary) % 100000:05d}"
+    )
+    approval = request_manager_approval(request_id, request.requestor, request.summary)
+    return AskResponse(
+        agent="ApprovalAgent",
+        answer=(
+            f"Approval request **{approval['request_id']}** created for {request.requestor}.\n"
+            f"Status: {approval['status']}. A manager must approve before provisioning continues."
+        ),
+        data={"approval": approval},
+    )
+
+
+@app.post("/approval/approve", response_model=AskResponse)
+async def approval_approve(request: ApprovalActionRequest) -> AskResponse:
+    from tools.approval_tools import approve_request
+    result = approve_request(request.request_id, request.approver)
+    return AskResponse(
+        agent="ApprovalAgent",
+        answer=f"Request {request.request_id} approved by {request.approver}.",
+        data={"approval": result},
+    )
+
+
+@app.post("/approval/reject", response_model=AskResponse)
+async def approval_reject(request: ApprovalActionRequest) -> AskResponse:
+    from tools.approval_tools import reject_request
+    result = reject_request(request.request_id, request.approver, request.reason or "")
+    return AskResponse(
+        agent="ApprovalAgent",
+        answer=f"Request {request.request_id} rejected by {request.approver}.",
+        data={"approval": result},
+    )
+
+
+@app.post("/audit", response_model=AskResponse)
 async def audit(request: AskRequest) -> AskResponse:
     agent = AuditAgent()
     response = agent.run(
         request.message,
         {"actor": request.actor, "action": "manual_audit", "resource": "user_input"},
     )
-    return AskResponse(agent=response.agent, answer=response.answer, data=response.data)
-
-
-@app.post("/execute")
-async def execute(request: AskRequest) -> AskResponse:
-    agent = ExecutionAgent()
-    response = agent.run(request.message, request.context or {})
     return AskResponse(agent=response.agent, answer=response.answer, data=response.data)
 
 

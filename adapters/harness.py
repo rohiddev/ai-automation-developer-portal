@@ -66,3 +66,8 @@ class HarnessOrchestrator(Orchestrator):
         raise NotImplementedError(
             "Harness approvals are handled inside the pipeline via HarnessApproval steps."
         )
+
+    def get_approval(self, request_id: str) -> dict[str, Any]:
+        raise NotImplementedError(
+            "Harness approvals are handled inside the pipeline via HarnessApproval steps."
+        )

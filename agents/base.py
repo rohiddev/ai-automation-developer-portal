@@ -56,7 +56,7 @@ class Agent:
         # Subclasses override this. Default returns a plain response.
         return AgentResponse(agent=self.name, answer=f"Agent {self.name} received: {user_input}")
 
-    def call_tool(self, name: str, **kwargs: Any) -> Any:
-        if name not in self.tools:
-            raise ValueError(f"Tool {name} not available on agent {self.name}")
-        return self.tools[name](**kwargs)
+    def call_tool(self, tool_name: str, **kwargs: Any) -> Any:
+        if tool_name not in self.tools:
+            raise ValueError(f"Tool {tool_name} not available on agent {self.name}")
+        return self.tools[tool_name](**kwargs)

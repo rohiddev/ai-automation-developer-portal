@@ -42,6 +42,10 @@ class Orchestrator(ABC):
     ) -> dict[str, Any]:
         """Create a new human-in-the-loop approval request."""
 
+    @abstractmethod
+    def get_approval(self, request_id: str) -> dict[str, Any]:
+        """Return the current status of an approval request."""
+
 
 class AuditStore(ABC):
     """Abstract audit backend. Implement for Cloud Logging, Datadog, Splunk, SIEM, etc."""

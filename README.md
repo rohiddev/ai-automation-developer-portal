@@ -61,6 +61,7 @@ ai-automation-developer-portal/
 ├── retrieval/           Knowledge/template retrieval backend
 ├── observability/       Structured logging and tracing
 ├── data/templates/      Sample Workflow and Pipeline YAML templates
+├── scripts/             Smoke tests and helper scripts
 ├── tests/               Unit tests
 ├── main.py              FastAPI app
 ├── config.py            Pydantic settings
@@ -96,6 +97,30 @@ uvicorn main:app --reload
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"message": "I need a K8s namespace for application SYSID-12345", "actor": "dev1"}'
+```
+
+## API endpoints
+
+All endpoints work with the default in-memory adapters, so the platform is fully functional via API without any external orchestrator.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/health` | Health check |
+| POST | `/ask` | Natural-language request; router picks the right specialist |
+| POST | `/generate/workflow` | Generate IDP Workflow YAML |
+| POST | `/generate/pipeline` | Generate orchestrator Pipeline YAML |
+| POST | `/execute` | Submit a workflow/pipeline execution |
+| POST | `/status` | Check execution status |
+| POST | `/approval/request` | Create a human approval request |
+| POST | `/approval/approve` | Approve a request |
+| POST | `/approval/reject` | Reject a request |
+| POST | `/audit` | Run a governance/secret scan |
+
+Run the smoke test against a local server to verify every endpoint works without Harness:
+
+```bash
+uvicorn main:app --reload &
+python scripts/test_api.py
 ```
 
 ## Configure production adapters

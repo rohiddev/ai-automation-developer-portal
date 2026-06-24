@@ -56,11 +56,21 @@ def _get_audit_store(settings: Settings) -> AuditStore:
     return InMemoryAuditStore()
 
 
+_ADAPTER_CACHE: dict[str, Any] = {}
+
+
 def get_adapters(settings: Settings | None = None) -> dict[str, Any]:
     """Return the configured orchestrator, secret store, and audit store."""
     settings = settings or get_settings()
-    return {
-        "orchestrator": _get_orchestrator(settings),
-        "secret_store": _get_secret_store(settings),
-        "audit_store": _get_audit_store(settings),
-    }
+    key = (
+        f"{settings.adapter_orchestrator}:"
+        f"{settings.adapter_secret_store}:"
+        f"{settings.adapter_audit_store}"
+    )
+    if key not in _ADAPTER_CACHE:
+        _ADAPTER_CACHE[key] = {
+            "orchestrator": _get_orchestrator(settings),
+            "secret_store": _get_secret_store(settings),
+            "audit_store": _get_audit_store(settings),
+        }
+    return _ADAPTER_CACHE[key]

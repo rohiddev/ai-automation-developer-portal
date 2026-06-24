@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from adapters.factory import get_adapters
@@ -40,15 +41,31 @@ def request_manager_approval(request_id: str, requestor: str, summary: str) -> d
     return approval
 
 
-def check_approval_status(request_id: str) -> dict[str, Any]:
+def check_approval_status(request_id: str, settings: Settings | None = None) -> dict[str, Any]:
     """Return the current approval status for a request."""
+    settings = settings or get_settings()
+    orchestrator = _get_orchestrator(settings)
+    try:
+        approval = orchestrator.get_approval(request_id)
+        if "status" in approval:
+            return approval
+    except Exception:
+        pass
     return _APPROVALS.get(request_id, {"error": "Approval request not found"})
 
 
 def approve_request(request_id: str, approver: str) -> dict[str, Any]:
     """Approve a request (manager action)."""
     orchestrator = _get_orchestrator()
-    approval = orchestrator.approve(request_id, approver)
+    try:
+        approval = orchestrator.approve(request_id, approver)
+    except (NotImplementedError, KeyError):
+        approval = _APPROVALS.get(request_id)
+        if not approval:
+            return {"error": "Approval request not found"}
+        approval["status"] = "approved"
+        approval["approved_by"] = approver
+        approval["approved_at"] = datetime.now(UTC).isoformat()
     record = build_audit_record(
         actor=approver,
         action="approval_granted",
@@ -61,7 +78,16 @@ def approve_request(request_id: str, approver: str) -> dict[str, Any]:
 def reject_request(request_id: str, approver: str, reason: str) -> dict[str, Any]:
     """Reject a request (manager action)."""
     orchestrator = _get_orchestrator()
-    approval = orchestrator.reject(request_id, approver, reason)
+    try:
+        approval = orchestrator.reject(request_id, approver, reason)
+    except (NotImplementedError, KeyError):
+        approval = _APPROVALS.get(request_id)
+        if not approval:
+            return {"error": "Approval request not found"}
+        approval["status"] = "rejected"
+        approval["approved_by"] = approver
+        approval["approved_at"] = datetime.now(UTC).isoformat()
+        approval["reason"] = reason
     record = build_audit_record(
         actor=approver,
         action="approval_rejected",
