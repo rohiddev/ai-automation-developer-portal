@@ -48,7 +48,7 @@ Tools Layer + Adapter Plane
         +---> Knowledge Retrieval (Vertex AI Search, internal corpus)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full enterprise design.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full enterprise design and [ARCHITECTURE_DEFENSE.md](ARCHITECTURE_DEFENSE.md) for the rationale and responses to common objections.
 
 ## Project structure
 
@@ -67,6 +67,7 @@ ai-automation-developer-portal/
 ├── config.py            Pydantic settings
 ├── README.md
 ├── ARCHITECTURE.md
+├── ARCHITECTURE_DEFENSE.md
 ├── GOVERNANCE.md
 ├── PITCH.md
 ├── USE_CASES.md
