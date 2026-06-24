@@ -1,0 +1,555 @@
+PIPELINE PROCESSING — ARCHITECTURE OPTIONS
+==========================================
+
+Context
+-------
+Current pattern: Harness IDP Workflow -> Harness Pipeline -> ShellScript steps via
+delegate -> API calls to enterprise systems.
+
+History: Apache Airflow was used previously, but it is a data orchestration tool
+with no native human-approval model, which made it a poor fit for platform
+workflows.
+
+What we need to keep:
+  * Human approval gates
+  * Audit trail
+  * Re-trigger capability
+  * Delegate access to internal systems
+
+These options are for platform engineering workflows — repo provisioning, AD groups,
+onboarding, Terraform — triggered from the IDP. They are not data pipelines.
+
+
+Option 1 — Keep Harness + Reduce Scope
+--------------------------------------
+Recommended for: low-risk change, fastest time to value.
+
+Problem:
+  You are paying for Harness compute on every pipeline run. Most pipelines are
+  simple HTTP calls or shell scripts — you do not need a full CI/CD platform for
+  them.
+
+Fix:
+  Keep Harness only for workflows that need:
+    - Native approval steps
+    - Re-trigger with pre-filled variables
+    - Harness IDP workflow trigger
+
+  Move pure API-call pipelines to a lightweight alternative and call them from
+  Harness via an HTTP step.
+
+  IDP Workflow
+      |
+      v
+  Harness Pipeline (thin orchestrator)
+      |-- Approval Stage        <- stays in Harness (native approval)
+      |-- HTTP Step             <- calls lightweight worker for actual processing
+              |
+              v
+          Lambda / Cloud Run    <- runs the script, no Harness delegate needed
+
+Cost saving:
+  You pay Harness only for orchestration and approval. Compute moves to Lambda
+  (~$0.20/million calls) or Cloud Run (pay per request).
+
+  Reduce delegate pool size — delegates are the main cost driver. If pipelines
+  call external workers instead of running scripts on delegates, you need fewer
+  delegate pods.
+
+
+Option 2 — GitHub Actions
+-------------------------
+Recommended for: GitHub-first teams.
+
+GitHub Actions has environment protection rules — a built-in approval gate before
+any environment deployment.
+
+  IDP Workflow
+      |  (triggers via GitHub API)
+      v
+  GitHub Actions Workflow
+      |-- Job 1: build / validate
+      |-- Environment: production    <- requires approver sign-off
+      |-- Job 2: provision/execute
+
+Approval mechanism:
+  Any GitHub team member with permission can approve. Audit trail is in GitHub.
+  Re-run from the UI with the same inputs.
+
+Cost:
+  * GitHub Free: 2,000 minutes/month (public repos unlimited)
+  * GitHub Team: $4/user/month, 3,000 minutes included
+  * Self-hosted runners: free minutes, you pay only for the runner compute
+
+Pros:
+  * Approvals are free and built-in
+  * Self-hosted runners on your own Kubernetes (same concept as Harness delegate)
+  * Native integration with GitHub repos
+  * OIDC to AWS/GCP — no long-lived credentials
+
+Cons:
+  * No IDP-native trigger (needs webhook from IDP)
+  * Less visibility in the Harness IDP catalog
+  * Approval UX is GitHub-native, not IDP-native
+
+
+Option 3 — Argo Workflows + Argo CD
+-----------------------------------
+Recommended for: Kubernetes-heavy teams.
+
+Argo Workflows is a Kubernetes-native workflow engine. It runs on your existing
+Kubernetes cluster — zero additional licensing cost.
+
+  IDP Workflow
+      |  (triggers via Argo REST API)
+      v
+  Argo Workflows
+      |-- Step 1: Validate request
+      |-- Suspend step            <- email/Slack notification sent
+      |       Human approves via Argo UI or API call
+      |-- Step 3: Execute (ShellScript container)
+      |-- Step 4: Notify result
+
+Approval mechanism:
+  A suspend template in Argo pauses execution. A human resumes it via the Argo UI,
+  CLI, or API call. You can build a thin approval UI on top.
+
+Cost:
+  * Argo Workflows: free (open source)
+  * Runs inside your existing Kubernetes cluster
+  * Pay only for pod compute during execution (seconds per run)
+
+Pros:
+  * Zero licensing cost
+  * Runs where your delegate already runs (same Kubernetes cluster)
+  * Full audit trail (Kubernetes events + Argo UI)
+  * Supports complex DAGs, retries, parallelism
+
+Cons:
+  * Approval UX is not polished — needs a custom wrapper or Argo Events
+  * More operations overhead than Harness (you manage the control plane)
+  * IDP integration requires custom webhook setup
+
+
+Option 4 — AWS Step Functions
+-----------------------------
+Recommended for: AWS-native teams.
+
+Step Functions is a serverless workflow orchestrator. You pay per state
+transition — a 5-step pipeline costs ~$0.000125.
+
+  IDP Workflow
+      |  (API Gateway trigger)
+      v
+  Step Functions State Machine
+      |-- State: Validate
+      |-- State: WaitForApproval    <- pauses until token is submitted
+      |       SNS email -> approver clicks link -> token returned
+      |-- State: Execute (Lambda)
+      |-- State: Notify (SNS/Email)
+
+Approval mechanism:
+  waitForTaskToken — Step Functions pauses and sends a token to the approver via
+  SNS/SES email. The approver clicks a link (or calls an API) to return the token
+  and resume execution. Fully managed, no polling.
+
+Cost:
+  * Standard Workflows: $0.025 per 1,000 state transitions
+  * 1,000 pipeline runs x 10 states = $0.25/month
+  * Lambda execution for scripts: $0.20/million requests
+  * Effectively free at enterprise pipeline volumes (hundreds/day)
+
+Pros:
+  * Cheapest option at scale
+  * Native approval built into AWS (no third-party dependency)
+  * No infrastructure to manage
+  * CloudWatch integration for audit trail
+  * Visual execution map in the AWS console
+
+Cons:
+  * AWS lock-in
+  * No IDP-native integration (needs API Gateway + webhook)
+  * JSON/Amazon States Language has a learning curve
+  * Script execution requires Lambda or ECS (not a shell delegate)
+
+
+Option 5 — Temporal
+-------------------
+Recommended for: complex, long-running workflows.
+
+Temporal is a durable workflow orchestration engine. Signals act as human approval
+gates. Self-hosted on your Kubernetes cluster.
+
+  IDP Workflow
+      |  (Temporal SDK trigger)
+      v
+  Temporal Workflow (Python/Go)
+      |-- Activity: Validate
+      |-- WaitForSignal("approved")  <- sends notification, waits indefinitely
+      |       Human sends signal via Temporal UI or API
+      |-- Activity: Execute
+      |-- Activity: Notify
+
+Approval mechanism:
+  workflow.wait_condition() or workflow.wait_for_signal() pauses durable
+  execution until a signal arrives. The workflow survives server restarts, pod
+  failures, even cluster restarts. Approval waits can last days or weeks.
+
+Cost:
+  * Temporal: free self-hosted (Temporal Server on Kubernetes)
+  * Temporal Cloud: $0.00025 per action
+  * Recommended: self-hosted for cost control
+
+Pros:
+  * Durable — workflows survive infrastructure failures
+  * Best for long-running, multi-day approval processes
+  * Strong retry and error handling model
+  * Good for Jenkins migration factory use cases
+
+Cons:
+  * Steepest learning curve of all options
+  * Self-hosting adds operational complexity
+  * SDK required (Python or Go) — no YAML pipelines
+  * Approval UX needs a custom build
+
+
+Comparison Table
+----------------
+
+                       |  Harness  | GitHub Actions | Argo Workflows | Step Functions |   Temporal
+-----------------------|-----------|----------------|----------------|----------------|-------------
+Cost model             | License   | Free + runner  | Free (K8s      | Pay per        | Free self-
+                       | /seat     | compute        | compute)       | transition     | hosted
+Cost at 1K runs/day    | $$$       | $              | $              | $0.25/day      | $
+Native approval        | Yes — best| Yes — env gate | Yes — suspend  | Yes — task     | Yes — signal
+                       | UX        |                | step           | token          |
+IDP trigger            | Native    | Webhook        | Webhook        | API Gateway    | SDK call
+Ops overhead           | Low       | Low            | Medium         | Low            | High
+Script execution       | Delegate  | Runner (K8s or | Container in  | Lambda / ECS   | Activity
+                       | (K8s)     | hosted)        | K8s            |                | worker
+Audit trail            | Harness   | GitHub UI      | Argo UI        | CloudWatch     | Temporal UI
+                       | UI        |                |                |                |
+Re-trigger             | Native    | Re-run         | Re-submit      | New execution  | New workflow
+                       |           | workflow       |                |                |
+Best for               | Full      | GitHub-native  | K8s-first      | AWS-native     | Complex long-
+                       | platform  | teams          | teams          | teams          | running
+
+
+Recommended Architecture — Hybrid Harness + Step Functions
+----------------------------------------------------------
+
+Keep Harness for what it does uniquely well (IDP integration, native approvals,
+catalog visibility). Offload compute-heavy or high-volume processing to Step
+Functions.
+
+  +--------------------------------------------------+
+  |  Harness IDP — Employee Self-Service               |
+  |  (Workflows, Catalog, Scorecards)                  |
+  +-------------------------+--------------------------+
+                            |
+                            v
+  +--------------------------------------------------+
+  |  Harness Pipeline — Thin Orchestrator              |
+  |                                                  |
+  |  Stage 1: Validate request (ShellScript - fast)  |
+  |  Stage 2: Approval (Harness native - stays here) |
+  |  Stage 3: HTTP Step -> trigger Step Functions   -+--+
+  |  Stage 4: Poll Step Functions for result           |  |
+  +--------------------------------------------------+  |
+                            |                           |
+                            +---------------------------+
+                            v
+  +--------------------------------------------------+
+  |  AWS Step Functions — Processing Worker            |
+  |                                                  |
+  |  State 1: Call GitHub API (create repo)          |
+  |  State 2: Call AD API (create groups)            |
+  |  State 3: Call Hoover API (register teams)       |
+  |  State 4: Return result to Harness               |
+  +--------------------------------------------------+
+
+What this gives you:
+  * Approval stays native in Harness IDP — zero change for users
+  * Processing moves off delegates (delegates are expensive, Lambda is not)
+  * Step Functions handles retries, polling, error states
+  * You shrink your delegate pool from N pods to 1-2 (only needed for thin
+    orchestration)
+  * Cost drops significantly — delegate compute is the biggest Harness cost lever
+
+
+Quick Decision Guide
+--------------------
+
+Stay on Harness only if:
+  Your team size is small, pipelines are few, and the IDP integration value
+  outweighs the cost.
+
+Move to GitHub Actions if:
+  Your team is GitHub-first and approvals can live outside the IDP.
+
+Add Step Functions if:
+  You are on AWS and want to cut delegate compute cost immediately — lowest
+  effort change.
+
+Add Argo Workflows if:
+  You already run Kubernetes and want zero licensing cost with maximum control.
+
+Add Temporal if:
+  Your workflows are long-running (multi-day approval processes), complex DAGs,
+  or you are building a Jenkins migration factory at scale.
+
+
+For Large Complex Companies — Enterprise-Scale Answer
+------------------------------------------------------
+
+A large complex company should not use a single tool. It should use a layered
+architecture where each layer uses the best tool for its job.
+
+Three workflow types exist simultaneously:
+
+  TYPE 1 — Self-Service Workflows
+    Employee requests, onboarding, provisioning, IDP-triggered.
+    Duration: minutes. Human approval required. Audit trail needed.
+    Examples: "Create repo", "Provision cloud account", "Reset VPN".
+
+  TYPE 2 — Platform / CI/CD Pipelines
+    Build, test, deploy, promote, release.
+    Duration: minutes to hours. Technical gates.
+    Examples: "Deploy to production", "Run regression suite".
+
+  TYPE 3 — Business Process Workflows
+    Multi-day, multi-team, multi-approval chains.
+    Duration: hours to weeks. Legal/finance/compliance involved.
+    Examples: "Vendor contract approval", "New hire onboarding".
+
+No single tool handles all three well. The right architecture assigns each type
+to its optimal engine.
+
+
+Enterprise Architecture Layers
+------------------------------
+
+  LAYER 1 — Employee Experience
+  -----------------------------
+    Harness IDP (Internal Developer Portal)
+      * Single front door for all self-service requests
+      * Catalog, Scorecards, Workflows, Search
+      * Every team's services visible in one place
+      * Triggers workflows to the right engine based on type
+
+            |
+    +-------+-------+-------+
+    |               |               |
+    v               v               v
+  TYPE 1        TYPE 2        TYPE 3
+  Harness       GitHub        Temporal
+  Pipelines     Actions       (Workflow Orchestration)
+  Self-service  CI/CD         Long-running business
+  + approvals   Build/Deploy  processes + approvals
+
+            |
+            v
+  LAYER 3 — Execution + Systems of Record
+  -----------------------------------------
+    ServiceNow    GitHub Enterprise    Active Directory
+    Workday       AWS / GCP / Azure    Vault (secrets)
+    Jira          Kubernetes           SAP / ERP
+
+            |
+            v
+  LAYER 4 — Observability + Audit
+  -------------------------------
+    OpenTelemetry -> CloudWatch / Grafana / Datadog
+    Structured audit logs -> immutable audit store (S3 / BigQuery)
+    Every approval, every execution, every failure — permanently recorded
+
+
+Why Temporal is the Core for a Large Company
+--------------------------------------------
+
+For Type 3 workflows — the ones that make or break enterprise reliability —
+Temporal is the best answer. Large companies (Stripe, Netflix, Uber, Coinbase,
+DoorDash, Box) converge on it for these reasons:
+
+1. Durable execution
+   A standard pipeline tool runs a script. If the server crashes mid-run, the
+   pipeline fails and someone re-runs it manually.
+
+   Temporal workflows are durable by design. If the server crashes, restarts, or
+   even the entire cluster goes down, the workflow resumes exactly where it left
+   off — including mid-approval waits. For a multi-day vendor approval process,
+   this is the difference between a reliable system and one that randomly loses
+   work.
+
+2. Multi-level approvals that span days
+   A Temporal workflow can pause for days between approval steps:
+
+     class VendorContractApproval:
+         async def run(self, contract):
+             await notify_manager()
+             await wait_for_signal(manager_approved)
+
+             if contract.value > 100_000:
+                 await notify_director()
+                 await wait_for_signal(director_approved)
+
+             if contract.value > 1_000_000:
+                 await notify_legal()
+                 await wait_for_signal(legal_approved)
+
+             await execute_contract()
+
+   Each wait pauses the workflow indefinitely until a human submits approval via
+   API, UI, or email link. The wait logic is code — you can change thresholds,
+   add roles, skip steps based on risk level. No YAML configuration limits.
+
+3. Code-first means no limits
+   YAML-based pipelines hit a wall on complex logic. When you need: "If the
+   request is from a regulated team AND the cost is over $50K AND it is Q4,
+   require a CFO approval step — otherwise skip it" — YAML becomes unreadable.
+
+   Temporal is code. Python, Go, Java. Engineers write the logic they need.
+   Complex conditional approval chains, dynamic routing, parallel approval paths,
+   escalation on timeout — all expressible in normal code.
+
+4. One platform across all teams
+   Temporal uses Namespaces to isolate teams:
+     * temporal-namespace: hr-workflows
+     * temporal-namespace: finance-workflows
+     * temporal-namespace: platform-workflows
+     * temporal-namespace: compliance-workflows
+
+   Each namespace has its own retention, scaling, and access control. One Temporal
+   cluster serves the whole company. Teams are isolated but the platform is
+   shared — no cost multiplication.
+
+5. Failure handling that enterprises need
+   Temporal retries at the activity level, not the workflow level. If ServiceNow
+   is slow, that specific step retries — the approval that happened 20 minutes ago
+   does not get repeated. This is the enterprise-grade retry model that YAML
+   pipelines cannot replicate.
+
+
+Tool Roles at Enterprise Scale
+------------------------------
+
+  Harness IDP
+    Role: Employee portal, catalog, scorecards
+    Why: Best self-service UI, native IDP workflows, catalog entity management
+
+  Harness Pipelines
+    Role: Type 1 self-service provisioning workflows
+    Why: Native IDP trigger, native approval, re-trigger with pre-filled vars
+
+  GitHub Actions
+    Role: Type 2 CI/CD build, test, deploy
+    Why: Free compute on self-hosted runners, OIDC to cloud, native GitHub
+         integration
+
+  Temporal
+    Role: Type 3 complex business processes
+    Why: Durable, code-first, multi-level approvals, enterprise scale
+
+  ServiceNow
+    Role: ITSM system of record
+    Why: Change management, CMDB, ticketing — Temporal writes to it, not replaces
+         it
+
+
+Example: Multi-Day Vendor Contract Approval
+-------------------------------------------
+
+Employee in IDP:
+  "I need a new vendor approved for a $200K contract."
+
+Harness IDP Workflow:
+  - Collects: vendor name, contract value, business justification
+  - Triggers: Temporal workflow via HTTP API
+
+Temporal — VendorApprovalWorkflow:
+  - Activity: validate request (call ServiceNow API)
+  - Activity: notify manager (send email with approval link)
+  - WaitForSignal: manager_approved (pauses up to 48h)
+    Manager clicks link -> Temporal API called -> signal received
+  - Activity: notify director (contract > $100K)
+  - WaitForSignal: director_approved (pauses up to 5 days)
+    Director approves via mobile app
+  - Activity: notify legal (contract > $100K)
+  - WaitForSignal: legal_approved (pauses up to 10 days)
+  - Activity: create PO in SAP
+  - Activity: update ServiceNow record
+  - Activity: notify requester — approved, PO created
+
+IDP catalog updated.
+Scorecard passes.
+Audit log written.
+
+The employee sees one workflow in the IDP. Temporal handles everything
+underneath — across days, across systems, across approval chains.
+
+
+Cost Model at Enterprise Scale
+------------------------------
+
+  Harness
+    License cost covers: IDP, pipelines, approvals, catalog
+    Cost driver: number of seats + delegate compute
+    Optimise by: shrinking delegate pool (move compute to workers)
+
+  GitHub Actions
+    License: included in GitHub Enterprise ($21/user/month)
+    Compute: self-hosted runners on existing Kubernetes = near zero
+    Net additional cost: $0 if already on GitHub Enterprise
+
+  Temporal (self-hosted)
+    License: $0 (open source)
+    Infrastructure: 3-node Kubernetes deployment + PostgreSQL
+    Operations cost: ~0.5 FTE to maintain
+    ROI break-even: ~50 complex workflows/month vs alternatives
+
+  Temporal Cloud (managed)
+    $0.00025 per action
+    1M actions/month = $250/month
+    No operations overhead
+
+
+What NOT to Use at Enterprise Scale
+-----------------------------------
+
+Single YAML pipeline tool for everything
+  YAML breaks down on complex conditional logic. Engineers spend more time
+  fighting the YAML than writing the workflow.
+
+Apache Airflow for approvals
+  Airflow is a data orchestration tool. It has no native human-approval model.
+  Using it for platform workflows means building approval infrastructure on top.
+  This was the previous mistake.
+
+ServiceNow Flow Designer as the workflow engine
+  ServiceNow is a system of record. Using it as a workflow engine creates vendor
+  lock-in and high licensing cost per automated action. Better to write TO
+  ServiceNow from Temporal.
+
+Fully managed Step Functions for long-running approvals
+  Step Functions Standard Workflows have a 1-year maximum execution time and cost
+  $0.025 per 1,000 transitions. At enterprise volume with complex state machines
+  this becomes expensive and hard to debug.
+
+
+Bottom Line
+-----------
+
+For a large complex company:
+
+  1. Harness IDP — the front door. Every employee starts here.
+  2. Harness Pipelines — Type 1 self-service with IDP-native approval. Keep it
+     for this.
+  3. GitHub Actions — Type 2 CI/CD. Already on GitHub Enterprise, near-zero
+     marginal cost.
+  4. Temporal — Type 3 complex business processes. The enterprise workflow
+     backbone. Durable, code-first, unlimited approval chain complexity, proven
+     at Stripe/Netflix/Uber scale.
+
+The investment in Temporal pays back fast. Every complex multi-approval process
+you move from fragile YAML pipelines to Temporal becomes auditable, resumable,
+and maintainable by a normal engineer — not a pipeline YAML specialist.

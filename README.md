@@ -61,6 +61,7 @@ ai-automation-developer-portal/
 ├── retrieval/           Knowledge/template retrieval backend
 ├── observability/       Structured logging and tracing
 ├── data/templates/      Sample Workflow and Pipeline YAML templates
+├── pipeline-processing/ Architecture options for pipeline processing backends
 ├── scripts/             Smoke tests and helper scripts
 ├── tests/               Unit tests
 ├── main.py              FastAPI app
